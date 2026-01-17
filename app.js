@@ -5,7 +5,15 @@ import routes from './routes/index.js';
 
 const app = express();
 
-app.use(cors({ credentials: true, origin: 'https://modularverse.vercel.app' }));  // Adjust for prod
+app.use(
+  cors({
+    origin: [
+      'https://modularverse.vercel.app',
+      'http://localhost:3000',
+    ],
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(cookieParser());
 
