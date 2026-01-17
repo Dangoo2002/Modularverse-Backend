@@ -13,7 +13,7 @@ app.get('/health', (_, res) => res.json({ status: 'ok' }));
 
 app.use('/api', routes);
 
-// Global error handler
+
 app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Server error', code: 500 });
 });
