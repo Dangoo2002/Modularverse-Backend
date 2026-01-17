@@ -6,10 +6,21 @@ import RefreshToken from '../models/RefreshToken.js';
 import { validate } from '../middleware/validate.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const ACCESS_EXP = process.env.ACCESS_TOKEN_EXP;
-const REFRESH_EXP = process.env.REFRESH_TOKEN_EXP;
+const ACCESS_EXP = process.env.ACCESS_TOKEN_EXP || '15m';
+const REFRESH_EXP = process.env.REFRESH_TOKEN_EXP || '7d';
 
-// Validation for registration - only allow viewer/editor roles
+// Cookie configuration for production vs development
+const getCookieOptions = () => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  return {
+    httpOnly: true,
+    secure: isProduction, // true in production (HTTPS only)
+    sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-site in production
+  };
+};
+
+// Validation for registration
 export const registerValidation = [
   body('email').isEmail().withMessage('Invalid email'),
   body('password').isLength({ min: 6 }).withMessage('Password too short'),
@@ -28,7 +39,7 @@ export const register = [
     try {
       const { email, password, name, role: clientRole } = req.body;
 
-      // Check if email already exists - specific error
+      // Check if email already exists
       const existing = await User.findOne({ email });
       if (existing) {
         return res.status(400).json({ error: 'Email already registered', code: 400 });
@@ -72,7 +83,7 @@ export const loginValidation = [
   body('password').notEmpty().withMessage('Password required'),
 ];
 
-// Login endpoint - specific errors for email not found vs wrong password
+// Login endpoint
 export const login = [
   loginValidation,
   validate,
@@ -80,13 +91,13 @@ export const login = [
     try {
       const { email, password } = req.body;
 
-      // Find user - specific "not found" error
+      // Find user
       const user = await User.findOne({ email });
       if (!user) {
         return res.status(401).json({ error: 'Email not registered', code: 401 });
       }
 
-      // Check password - specific "incorrect password" error
+      // Check password
       const passwordMatch = await bcrypt.compare(password, user.password);
       if (!passwordMatch) {
         return res.status(401).json({ error: 'Incorrect password', code: 401 });
@@ -105,22 +116,24 @@ export const login = [
         { expiresIn: REFRESH_EXP }
       );
 
+      // Store refresh token in DB
       await RefreshToken.create({
         token: refreshTokenStr,
         userId: user._id,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       });
 
+      // Set cookies with proper configuration
+      const cookieOptions = getCookieOptions();
+      
       res.cookie('accessToken', accessToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        ...cookieOptions,
+        maxAge: 15 * 60 * 1000, // 15 minutes
       });
 
       res.cookie('refreshToken', refreshTokenStr, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        ...cookieOptions,
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       });
 
       res.json({
@@ -134,30 +147,60 @@ export const login = [
   },
 ];
 
-// Refresh endpoint (unchanged)
+// Refresh endpoint
 export const refresh = async (req, res) => {
   try {
-    const decoded = jwt.verify(req.cookies.refreshToken, JWT_SECRET);
-    const user = await User.findById(req.userId); // From verifyRefresh
-    if (!user) return res.status(401).json({ error: 'Invalid user', code: 401 });
+    const user = await User.findById(req.userId); // From verifyRefresh middleware
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid user', code: 401 });
+    }
 
-    const newAccess = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: ACCESS_EXP });
-    res.cookie('accessToken', newAccess, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' });
+    const newAccessToken = jwt.sign(
+      { id: user._id, role: user.role },
+      JWT_SECRET,
+      { expiresIn: ACCESS_EXP }
+    );
+
+    const cookieOptions = getCookieOptions();
+    
+    res.cookie('accessToken', newAccessToken, {
+      ...cookieOptions,
+      maxAge: 15 * 60 * 1000, // 15 minutes
+    });
+
     res.json({ message: 'Token refreshed' });
   } catch (err) {
+    console.error('Refresh error:', err);
     res.status(401).json({ error: 'Refresh failed', code: 401 });
   }
 };
 
-// Logout endpoint (unchanged)
+// Logout endpoint
 export const logout = async (req, res) => {
-  await RefreshToken.deleteOne({ token: req.cookies.refreshToken });
-  res.clearCookie('accessToken');
-  res.clearCookie('refreshToken');
-  res.json({ message: 'Logged out' });
+  try {
+    // Delete refresh token from DB
+    if (req.cookies.refreshToken) {
+      await RefreshToken.deleteOne({ token: req.cookies.refreshToken });
+    }
+
+    // Clear cookies with same options as setting them
+    const cookieOptions = getCookieOptions();
+    
+    res.clearCookie('accessToken', cookieOptions);
+    res.clearCookie('refreshToken', cookieOptions);
+
+    res.json({ message: 'Logged out' });
+  } catch (err) {
+    console.error('Logout error:', err);
+    res.status(500).json({ error: 'Server error during logout', code: 500 });
+  }
 };
 
-// Me endpoint (unchanged)
+// Me endpoint
 export const me = (req, res) => {
-  res.json({ id: req.user.id, role: req.user.role });
+  res.json({ 
+    id: req.user.id, 
+    role: req.user.role,
+    email: req.user.email 
+  });
 };
