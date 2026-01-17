@@ -5,6 +5,8 @@ import routes from './routes/index.js';
 
 const app = express();
 
+app.set('trust proxy', 1);
+
 // Allow all Vercel deployments
 const allowedOrigins = [
   'https://modularverse.vercel.app',
